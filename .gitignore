@@ -1,0 +1,138 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+*.env
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# pytype
+.pytype/
+
+# Cython
+cython_debug/
+
+# 日志文件
+*.log
+logs/
+*.log.*
+
+# 进程ID文件
+*.pid
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 模型缓存和下载
+.cache/
+models/
+*.bin
+*.safetensors
+.huggingface/
+transformers_cache/
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 测试覆盖率
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.hypothesis/
+
+# 文档构建
+docs/_build/
+site/
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# 压缩文件（可选，根据项目需要）
+# *.zip
+# *.tar.gz
+# *.rar
+
+# 配置文件（如果包含敏感信息）
+# config.ini
+# settings.json
+

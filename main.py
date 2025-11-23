@@ -12,6 +12,10 @@ from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
 
+# 配置 Hugging Face 镜像源（如果未设置）
+if not os.getenv("HF_ENDPOINT"):
+    # 使用 hf-mirror.com 作为默认镜像源
+    os.environ["HF_ENDPOINT"] = os.getenv("HF_MIRROR_ENDPOINT", "https://hf-mirror.com")
 
 logger = logging.getLogger("gpu_pdf_server")
 logging.basicConfig(level=logging.INFO)

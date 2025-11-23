@@ -64,11 +64,27 @@ echo "[STEP] 安装 GPU_server Python 依赖"
 cd "$ROOT_DIR"
 pip install -r requirements.txt
 
+echo "[STEP] 配置 Hugging Face 镜像源"
+# 设置 Hugging Face 镜像源环境变量（如果未设置）
+if [[ -z "${HF_ENDPOINT}" ]]; then
+  # 默认使用 hf-mirror.com 镜像源
+  export HF_ENDPOINT="${HF_MIRROR_ENDPOINT:-https://hf-mirror.com}"
+  echo "[INFO] 已设置 HF_ENDPOINT=${HF_ENDPOINT}"
+else
+  echo "[INFO] 使用已设置的 HF_ENDPOINT=${HF_ENDPOINT}"
+fi
+
 echo "[STEP] 预下载 embedding / rerank / marker 模型 (首次会较慢)"
 python - << 'PYCODE'
 import os
 from sentence_transformers import SentenceTransformer
 from FlagEmbedding import FlagReranker
+
+# 确保使用镜像源
+if not os.getenv("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = os.getenv("HF_MIRROR_ENDPOINT", "https://hf-mirror.com")
+
+print(f"[PY] 使用 Hugging Face 镜像源: {os.getenv('HF_ENDPOINT')}")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL_NAME", "BAAI/bge-large-zh-v1.5")
 RERANK_MODEL = os.getenv("RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3")
@@ -131,23 +147,58 @@ else
   echo "[WARN] 未检测到 nginx 命令，请确认 Nginx 已正确安装并在 PATH 中。"
 fi
 
+echo "[STEP] 配置后台启动脚本"
+chmod +x "$ROOT_DIR/start_gpu_server.sh"
+echo "[INFO] 启动脚本已准备: $ROOT_DIR/start_gpu_server.sh"
+
 echo
-cat <<TIP
-[完成] GPU 模型服务安装步骤已完成。
-
-下一步：
-1. 在 GPU 服务器上启动 uvicorn（建议使用 tmux/screen 守护）：
-
-   cd "$ROOT_DIR"
-   source venv/bin/activate
-   uvicorn main:app --host 0.0.0.0 --port ${GPU_SERVER_PORT_INTERNAL} --workers 1
-
-2. 在主业务服务器上，将环境变量指向 Nginx 暴露的 16000 端口，例如：
-
-   export GPU_MODEL_SERVER_URL="http://<GPU_SERVER_IP>:${GPU_SERVER_PORT_PUBLIC}"
-
-3. 测试：
-
-   curl http://<GPU_SERVER_IP>:${GPU_SERVER_PORT_PUBLIC}/docs
-
-TIP
+echo "[完成] GPU 模型服务安装步骤已完成！"
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  下一步操作"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "1️⃣  启动服务（三种方式任选其一）："
+echo ""
+echo "   方式 1 - Systemd 服务管理（推荐，自动重启、开机自启）："
+echo "     sudo $ROOT_DIR/start_gpu_server.sh systemd"
+echo ""
+echo "   方式 2 - 后台启动（适合无 systemd 环境）："
+echo "     $ROOT_DIR/start_gpu_server.sh background"
+echo ""
+echo "   方式 3 - 前台启动（用于调试）："
+echo "     cd $ROOT_DIR"
+echo "     source venv/bin/activate"
+echo "     uvicorn main:app --host 0.0.0.0 --port ${GPU_SERVER_PORT_INTERNAL} --workers 1"
+echo ""
+echo "2️⃣  配置开机自启（如果没有 systemd）："
+echo ""
+echo "     sudo $ROOT_DIR/start_gpu_server.sh enable-autostart"
+echo ""
+echo "3️⃣  服务管理命令："
+echo ""
+echo "     查看状态: $ROOT_DIR/start_gpu_server.sh status"
+echo "     停止服务: $ROOT_DIR/start_gpu_server.sh stop"
+echo "     重启服务: $ROOT_DIR/start_gpu_server.sh restart"
+echo ""
+if command -v systemctl >/dev/null 2>&1; then
+echo "   （如果使用 systemd）："
+echo "     查看状态: systemctl status gpu-server"
+echo "     查看日志: journalctl -u gpu-server -f"
+echo "     停止服务: systemctl stop gpu-server"
+echo "     重启服务: systemctl restart gpu-server"
+echo ""
+fi
+echo "4️⃣  在主业务服务器上配置环境变量："
+echo ""
+echo "     export GPU_MODEL_SERVER_URL=\"http://<GPU_SERVER_IP>:${GPU_SERVER_PORT_PUBLIC}\""
+echo ""
+echo "5️⃣  测试服务："
+echo ""
+echo "     curl http://localhost:${GPU_SERVER_PORT_PUBLIC}/health"
+echo "     curl http://localhost:${GPU_SERVER_PORT_PUBLIC}/docs"
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "📖 更多信息请查看 README.md"
+echo ""
