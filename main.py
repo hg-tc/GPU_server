@@ -11,15 +11,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer, CrossEncoder
+import torch
 
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
 
-# 配置 Hugging Face 镜像源（如果未设置）
-if not os.getenv("HF_ENDPOINT"):
-    # 使用 hf-mirror.com 作为默认镜像源
-    os.environ["HF_ENDPOINT"] = os.getenv("HF_MIRROR_ENDPOINT", "https://hf-mirror.com")
+# 配置 Hugging Face 离线模式（如果模型已完全下载，可以避免网络请求）
+# 注意：启用后如果模型文件不完整可能会失败
+HF_HUB_OFFLINE = os.getenv("HF_HUB_OFFLINE", "0").lower() in {"1", "true", "yes"}
+if HF_HUB_OFFLINE:
+    # 完全禁用 Hugging Face Hub 的网络请求
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
+    # 禁用重试机制
+    os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+    # 禁用版本检查
+    os.environ["HF_HUB_DISABLE_VERSION_CHECK"] = "1"
+else:
+    # 配置 Hugging Face 镜像源（如果未设置）
+    if not os.getenv("HF_ENDPOINT"):
+        # 使用 hf-mirror.com 作为默认镜像源
+        os.environ["HF_ENDPOINT"] = os.getenv("HF_MIRROR_ENDPOINT", "https://hf-mirror.com")
 
 # 配置日志系统
 def setup_logging():
@@ -67,15 +81,55 @@ def setup_logging():
     logger = logging.getLogger("gpu_pdf_server")
     logger.setLevel(logging.DEBUG)
     
-    # 降低第三方库的日志级别
+    # 降低第三方库的日志级别（减少日志噪音）
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)  # 减少 Hugging Face 网络请求的 DEBUG 日志
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.WARNING)  # 减少 transformers 库的详细日志
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)  # 减少 Hugging Face Hub 的详细日志
+    
+    # 如果启用离线模式，完全禁用网络相关日志
+    if os.getenv("HF_HUB_OFFLINE") == "1":
+        logging.getLogger("urllib3").setLevel(logging.ERROR)
+        logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+        logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
     
     return logger
 
 logger = setup_logging()
+
+# 记录离线模式状态
+if os.getenv("HF_HUB_OFFLINE", "0") == "1":
+    logger.info("=" * 60)
+    logger.info("📴 Hugging Face 离线模式已启用")
+    logger.info("   模型将从本地缓存加载，不会进行网络请求")
+    logger.info("=" * 60)
+
+# 启动时检测并记录GPU信息
+try:
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        logger.info("=" * 60)
+        logger.info("🚀 GPU 检测信息:")
+        logger.info(f"  ✅ CUDA可用: 是")
+        logger.info(f"  📦 CUDA版本: {torch.version.cuda}")
+        logger.info(f"  🔧 PyTorch版本: {torch.__version__}")
+        logger.info(f"  🎮 GPU数量: {gpu_count}")
+        for i in range(gpu_count):
+            props = torch.cuda.get_device_properties(i)
+            logger.info(f"  🎯 GPU {i}: {props.name}")
+            logger.info(f"     显存: {props.total_memory / 1024**3:.2f} GB")
+            logger.info(f"     计算能力: {props.major}.{props.minor}")
+        logger.info("=" * 60)
+    else:
+        logger.warning("=" * 60)
+        logger.warning("⚠️  CUDA不可用，模型将使用CPU运行（性能较慢）")
+        logger.warning("=" * 60)
+except Exception as e:
+    logger.warning(f"GPU检测失败: {e}")
 
 app = FastAPI(
     title="GPU Model Server",
@@ -131,7 +185,14 @@ _reranker = None
 def _get_converter() -> PdfConverter:
     global _converter
     if _converter is None:
-        logger.info("Initializing marker-pdf models on GPU server...")
+        device = _get_device()
+        logger.info(f"Initializing marker-pdf models on GPU server... | device={device}")
+        
+        if device == "cuda":
+            logger.info(f"使用GPU加速PDF转换 | GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+        else:
+            logger.warning("使用CPU运行PDF转换（性能较慢）")
+        
         models = create_model_dict()
         use_llm_env = os.getenv("MARKER_USE_LLM", "false").lower()
         use_llm = use_llm_env in {"1", "true", "yes"}
@@ -147,17 +208,76 @@ def _get_converter() -> PdfConverter:
             renderer=None,
             llm_service=None,
         )
-        logger.info("marker-pdf initialized successfully on GPU server")
+        logger.info(f"marker-pdf initialized successfully on GPU server | device={device}")
     return _converter
+
+
+def _get_device() -> str:
+    """智能检测并返回最佳设备（GPU优先）"""
+    # 检查是否强制使用CPU
+    force_cpu = os.getenv("FORCE_CPU", "0").lower() in {"1", "true", "yes"}
+    if force_cpu:
+        return "cpu"
+    
+    # 检查CUDA是否可用
+    cuda_available = torch.cuda.is_available()
+    
+    # 如果设置了CUDA_VISIBLE_DEVICES且不为空，使用CUDA
+    cuda_visible = os.getenv("CUDA_VISIBLE_DEVICES")
+    if cuda_visible is not None and cuda_visible.strip() != "":
+        if cuda_available:
+            return "cuda"
+        else:
+            logger.warning(f"CUDA_VISIBLE_DEVICES设置为'{cuda_visible}'但CUDA不可用，使用CPU")
+            return "cpu"
+    
+    # 如果强制使用CUDA
+    force_cuda = os.getenv("FORCE_CUDA", "0").lower() in {"1", "true", "yes"}
+    if force_cuda:
+        if cuda_available:
+            return "cuda"
+        else:
+            logger.warning("FORCE_CUDA=1但CUDA不可用，使用CPU")
+            return "cpu"
+    
+    # 自动检测：如果CUDA可用，优先使用GPU
+    if cuda_available:
+        device_count = torch.cuda.device_count()
+        if device_count > 0:
+            device_name = torch.cuda.get_device_name(0)
+            logger.info(f"自动检测到GPU: {device_name} (设备数量: {device_count})")
+            return "cuda"
+    
+    return "cpu"
 
 
 def _get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
         model_name = os.getenv("EMBED_MODEL_NAME", "BAAI/bge-large-zh-v1.5")
-        device = "cuda" if os.getenv("CUDA_VISIBLE_DEVICES") or os.getenv("FORCE_CUDA", "0") == "1" else "cpu"
+        device = _get_device()
         logger.info(f"Initializing embedding model on GPU server: {model_name}, device={device}")
+        
+        if device == "cuda":
+            logger.info(f"使用GPU加速嵌入模型 | GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+        else:
+            logger.warning("使用CPU运行嵌入模型（性能较慢）")
+        
+        # 在离线模式下，使用本地缓存路径
+        if os.getenv("HF_HUB_OFFLINE") == "1":
+            # 尝试从本地缓存加载
+            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+            logger.info(f"离线模式：尝试从本地缓存加载模型: {model_name}")
+        
         _embedder = SentenceTransformer(model_name, device=device)
+        
+        # 验证实际使用的设备
+        if hasattr(_embedder, '_modules') and len(_embedder._modules) > 0:
+            first_module = list(_embedder._modules.values())[0]
+            if hasattr(first_module, 'device'):
+                actual_device = str(first_module.device)
+                logger.info(f"嵌入模型实际运行设备: {actual_device}")
+        
         logger.info("Embedding model initialized successfully")
     return _embedder
 
@@ -166,18 +286,24 @@ def _get_reranker():
     global _reranker
     if _reranker is None:
         model_name = os.getenv("RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3")
-        device = "cuda" if os.getenv("CUDA_VISIBLE_DEVICES") or os.getenv("FORCE_CUDA", "0") == "1" else "cpu"
+        device = _get_device()
         logger.info(f"Initializing reranker model on GPU server: {model_name}, device={device}")
+        
+        if device == "cuda":
+            logger.info(f"使用GPU加速重排序模型 | GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+        else:
+            logger.warning("使用CPU运行重排序模型（性能较慢）")
+        
         try:
             from FlagEmbedding import FlagReranker
 
-            use_fp16 = device == "cuda"
+            use_fp16 = device == "cuda" and torch.cuda.is_available()
             _reranker = FlagReranker(model_name, use_fp16=use_fp16, device=device)
-            logger.info("FlagReranker initialized successfully")
+            logger.info(f"FlagReranker initialized successfully | device={device}, fp16={use_fp16}")
         except ImportError:
             logger.warning("FlagEmbedding not available, falling back to CrossEncoder")
             _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2", device=device)
-            logger.info("CrossEncoder initialized successfully")
+            logger.info(f"CrossEncoder initialized successfully | device={device}")
     return _reranker
 
 

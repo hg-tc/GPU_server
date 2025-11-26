@@ -202,7 +202,17 @@ case "$MODE" in
     source "$VENV_DIR/bin/activate"
     
     # 设置环境变量
-    export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+    # 离线模式配置（默认启用）
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+    export HF_HUB_DISABLE_EXPERIMENTAL_WARNING="${HF_HUB_DISABLE_EXPERIMENTAL_WARNING:-1}"
+    export HF_HUB_DISABLE_VERSION_CHECK="${HF_HUB_DISABLE_VERSION_CHECK:-1}"
+    
+    # 如果未启用离线模式，则设置镜像源
+    if [[ "${HF_HUB_OFFLINE}" != "1" ]]; then
+        export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+    fi
     
     exec uvicorn main:app --host 0.0.0.0 --port "$PORT" --workers 1
     ;;
@@ -217,7 +227,17 @@ case "$MODE" in
     source "$VENV_DIR/bin/activate"
     
     # 设置环境变量
-    export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+    # 离线模式配置（默认启用）
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
+    export HF_HUB_DISABLE_EXPERIMENTAL_WARNING="${HF_HUB_DISABLE_EXPERIMENTAL_WARNING:-1}"
+    export HF_HUB_DISABLE_VERSION_CHECK="${HF_HUB_DISABLE_VERSION_CHECK:-1}"
+    
+    # 如果未启用离线模式，则设置镜像源
+    if [[ "${HF_HUB_OFFLINE}" != "1" ]]; then
+        export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+    fi
     
     # 创建日志目录
     LOG_DIR="$ROOT_DIR/logs"

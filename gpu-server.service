@@ -8,9 +8,13 @@ Type=simple
 User=root
 WorkingDirectory=/root/GPU_server
 Environment="PATH=/root/GPU_server/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="HF_ENDPOINT=https://hf-mirror.com"
-Environment="CUDA_VISIBLE_DEVICES="
-Environment="FORCE_CUDA=0"
+Environment="HF_HUB_OFFLINE=1"
+Environment="TRANSFORMERS_OFFLINE=1"
+Environment="HF_DATASETS_OFFLINE=1"
+Environment="HF_HUB_DISABLE_EXPERIMENTAL_WARNING=1"
+Environment="HF_HUB_DISABLE_VERSION_CHECK=1"
+Environment="CUDA_VISIBLE_DEVICES=0"
+Environment="FORCE_CUDA=1"
 Environment="EMBED_MODEL_NAME=BAAI/bge-large-zh-v1.5"
 Environment="RERANKER_MODEL_NAME=BAAI/bge-reranker-v2-m3"
 Environment="MARKER_USE_LLM=false"
