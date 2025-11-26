@@ -54,9 +54,11 @@ pip install --upgrade pip
 
 echo "[STEP] 提示：请根据 GPU 服务器的 CUDA 环境自行安装合适的 PyTorch 版本"
 echo "       示例 (CUDA 11.8):"
-echo "         pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \\\n  --index-url https://download.pytorch.org/whl/cu118"
+echo "         pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \\\n   --index-url https://download.pytorch.org/whl/cu118"
 echo "       示例 (仅 CPU):"
 echo "         pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0"
+echo "       如需启用 GPU OCR（PaddleOCR），请根据环境安装对应的 paddlepaddle-gpu 版本，例如:"
+echo "         pip install paddlepaddle-gpu -i https://mirror.baidu.com/pypi/simple"
 echo
 read -rp "[INPUT] 如已安装 PyTorch 或暂不安装，直接回车继续；如需现在安装，请手动执行上面的 pip 命令后再回车..." _dummy
 

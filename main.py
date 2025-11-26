@@ -126,6 +126,7 @@ app.add_middleware(
 _converter = None
 _embedder: SentenceTransformer | None = None
 _reranker = None
+_ocr_engine = None
 
 
 def _get_converter() -> PdfConverter:
@@ -179,6 +180,28 @@ def _get_reranker():
             _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2", device=device)
             logger.info("CrossEncoder initialized successfully")
     return _reranker
+
+
+def _get_ocr_engine():
+    global _ocr_engine
+    if _ocr_engine is None:
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as e:
+            logger.error("PaddleOCR not available on GPU server: %s", e)
+            raise
+
+        use_gpu_env = os.getenv("GPU_OCR_USE_GPU", "1").lower()
+        use_gpu = use_gpu_env in {"1", "true", "yes"}
+
+        _ocr_engine = PaddleOCR(
+            use_angle_cls=True,
+            lang="ch",
+            use_gpu=use_gpu,
+            show_log=False,
+        )
+        logger.info("OCR engine initialized with PaddleOCR (use_gpu=%s)", use_gpu)
+    return _ocr_engine
 
 
 class EmbedRequest(BaseModel):
@@ -402,3 +425,91 @@ async def rerank(request: RerankRequest) -> RerankResponse:
             exc_info=True
         )
         raise HTTPException(status_code=500, detail=f"Rerank failed: {e}")
+
+
+class OCRResponse(BaseModel):
+    text: str
+    confidence: float
+    lines: List[str]
+    confidences: List[float]
+    boxes: List[List[List[float]]]
+
+
+@app.post("/ocr_image", response_model=OCRResponse)
+async def ocr_image(file: UploadFile = File(...)) -> OCRResponse:
+    task_start_time = time.time()
+    tmp_path = None
+
+    try:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Empty filename")
+
+        suffix = os.path.splitext(file.filename)[1].lower() or ".png"
+
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp_path = tmp.name
+            content = await file.read()
+            if not content:
+                raise HTTPException(status_code=400, detail="Empty image file")
+            tmp.write(content)
+
+        ocr_engine = _get_ocr_engine()
+
+        ocr_result = ocr_engine.ocr(tmp_path, cls=True)
+
+        lines: List[str] = []
+        confidences: List[float] = []
+        boxes: List[List[List[float]]] = []
+
+        if ocr_result and ocr_result[0]:
+            for item in ocr_result[0]:
+                if not item or len(item) < 2:
+                    continue
+                box = item[0]
+                text_info = item[1]
+                if not text_info or len(text_info) < 2:
+                    continue
+                text = text_info[0]
+                score = float(text_info[1])
+                if text:
+                    lines.append(text)
+                    confidences.append(score)
+                    boxes.append(box)
+
+        full_text = "\n".join(lines)
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+        elapsed = time.time() - task_start_time
+
+        logger.info(
+            "[OCR任务] 完成 | 文件名: %s | 文本长度: %d | 置信度: %.4f | 耗时: %.3fs",
+            file.filename,
+            len(full_text),
+            avg_conf,
+            elapsed,
+        )
+
+        return OCRResponse(
+            text=full_text,
+            confidence=avg_conf,
+            lines=lines,
+            confidences=confidences,
+            boxes=boxes,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        elapsed = time.time() - task_start_time
+        logger.error(
+            "[OCR任务] 失败 | 文件名: %s | 耗时: %.3fs | 错误: %s",
+            file.filename,
+            elapsed,
+            str(e),
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail=f"OCR failed: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
