@@ -502,9 +502,175 @@ class RerankResponse(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    """健康检查接口"""
+    """健康检查接口 - 返回详细的服务器状态"""
     logger.debug("[健康检查] 收到健康检查请求")
-    return {"status": "ok"}
+    
+    status = {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "version": "0.2.0",
+    }
+    
+    # GPU 信息
+    try:
+        if torch.cuda.is_available():
+            gpu_info = {
+                "available": True,
+                "device_count": torch.cuda.device_count(),
+                "current_device": torch.cuda.current_device(),
+                "device_name": torch.cuda.get_device_name(0),
+            }
+            # 显存信息
+            try:
+                memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
+                memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+                memory_total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                gpu_info["memory"] = {
+                    "allocated_gb": round(memory_allocated, 2),
+                    "reserved_gb": round(memory_reserved, 2),
+                    "total_gb": round(memory_total, 2),
+                    "free_gb": round(memory_total - memory_reserved, 2),
+                }
+            except Exception:
+                pass
+            status["gpu"] = gpu_info
+        else:
+            status["gpu"] = {"available": False}
+    except Exception as e:
+        status["gpu"] = {"available": False, "error": str(e)}
+    
+    # 模型加载状态
+    status["models"] = {
+        "embedder": _embedder is not None,
+        "reranker": _reranker is not None,
+        "converter": _converter is not None,
+        "ocr": _ocr_engine is not None,
+    }
+    
+    # 请求队列状态
+    status["queue"] = {
+        "embed_queue_size": _request_queue.get("embed", 0),
+        "rerank_queue_size": _request_queue.get("rerank", 0),
+        "pdf_queue_size": _request_queue.get("pdf", 0),
+    }
+    
+    return status
+
+
+# 请求队列计数器（用于监控）
+_request_queue = {"embed": 0, "rerank": 0, "pdf": 0, "ocr": 0}
+_request_stats = {
+    "embed_total": 0, "embed_success": 0, "embed_failed": 0,
+    "rerank_total": 0, "rerank_success": 0, "rerank_failed": 0,
+    "pdf_total": 0, "pdf_success": 0, "pdf_failed": 0,
+    "ocr_total": 0, "ocr_success": 0, "ocr_failed": 0,
+}
+
+
+@app.get("/stats")
+async def get_stats():
+    """获取服务器统计信息"""
+    return {
+        "queue": _request_queue,
+        "stats": _request_stats,
+        "uptime_seconds": time.time() - _server_start_time,
+    }
+
+
+_server_start_time = time.time()
+
+
+@app.post("/clear_cache")
+async def clear_gpu_cache():
+    """清理 GPU 缓存以释放显存"""
+    try:
+        if torch.cuda.is_available():
+            before_memory = torch.cuda.memory_allocated(0) / 1024**3
+            torch.cuda.empty_cache()
+            after_memory = torch.cuda.memory_allocated(0) / 1024**3
+            freed = before_memory - after_memory
+            
+            logger.info(f"[缓存清理] GPU 缓存已清理 | 释放: {freed:.2f} GB")
+            
+            return {
+                "status": "ok",
+                "message": "GPU cache cleared",
+                "freed_gb": round(freed, 2),
+                "current_allocated_gb": round(after_memory, 2),
+            }
+        else:
+            return {
+                "status": "ok",
+                "message": "No GPU available, nothing to clear",
+            }
+    except Exception as e:
+        logger.error(f"[缓存清理] 清理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {e}")
+
+
+# 批量嵌入请求模型
+class BatchEmbedRequest(BaseModel):
+    batches: List[List[str]]  # 多个批次的文本
+
+
+class BatchEmbedResponse(BaseModel):
+    embeddings: List[List[List[float]]]  # 每个批次的嵌入结果
+    batch_times: List[float]  # 每个批次的处理时间
+
+
+@app.post("/embed_batch", response_model=BatchEmbedResponse)
+async def embed_batch(request: BatchEmbedRequest) -> BatchEmbedResponse:
+    """
+    批量嵌入多个文本批次
+    
+    适用于需要处理大量文本的场景，减少网络往返次数
+    """
+    global _request_queue, _request_stats
+    
+    task_start_time = time.time()
+    _request_queue["embed"] += 1
+    _request_stats["embed_total"] += 1
+    
+    if not request.batches:
+        _request_queue["embed"] -= 1
+        return BatchEmbedResponse(embeddings=[], batch_times=[])
+    
+    try:
+        total_texts = sum(len(batch) for batch in request.batches)
+        logger.info(f"[批量嵌入] 开始处理 | 批次数: {len(request.batches)} | 总文本数: {total_texts}")
+        
+        model = _get_embedder()
+        all_embeddings = []
+        batch_times = []
+        
+        for i, batch in enumerate(request.batches):
+            if not batch:
+                all_embeddings.append([])
+                batch_times.append(0)
+                continue
+            
+            batch_start = time.time()
+            vectors = model.encode(batch, normalize_embeddings=True)
+            batch_time = time.time() - batch_start
+            
+            all_embeddings.append(vectors.tolist())
+            batch_times.append(round(batch_time, 3))
+        
+        total_time = time.time() - task_start_time
+        logger.info(
+            f"[批量嵌入] ✅ 完成 | 批次数: {len(request.batches)} | "
+            f"总文本数: {total_texts} | 总耗时: {total_time:.3f}s"
+        )
+        
+        _request_stats["embed_success"] += 1
+        return BatchEmbedResponse(embeddings=all_embeddings, batch_times=batch_times)
+    
+    except Exception as e:
+        _request_stats["embed_failed"] += 1
+        logger.error(f"[批量嵌入] ❌ 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Batch embedding failed: {e}")
+    finally:
+        _request_queue["embed"] -= 1
 
 
 @app.post("/pdf_to_markdown")
@@ -593,10 +759,15 @@ async def pdf_to_markdown(file: UploadFile = File(...)):
 @app.post("/embed", response_model=EmbedResponse)
 async def embed(request: EmbedRequest) -> EmbedResponse:
     """Embed a batch of texts using a shared SentenceTransformer model on this server."""
+    global _request_queue, _request_stats
+    
     task_start_time = time.time()
+    _request_queue["embed"] += 1
+    _request_stats["embed_total"] += 1
     
     if not request.texts:
         logger.warning("[嵌入任务] 请求文本列表为空")
+        _request_queue["embed"] -= 1
         return EmbedResponse(embeddings=[])
     
     try:
@@ -645,28 +816,36 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
             f"速度: {text_count/encode_time:.1f} texts/s"
         )
         
+        _request_stats["embed_success"] += 1
         return EmbedResponse(embeddings=embeddings)
     except HTTPException:
-        # 重新抛出HTTP异常，确保响应被发送
+        _request_stats["embed_failed"] += 1
         raise
     except Exception as e:
+        _request_stats["embed_failed"] += 1
         total_time = time.time() - task_start_time
         logger.error(
             f"[嵌入任务] ❌ 嵌入失败 | 文本数量: {len(request.texts) if request.texts else 0} | "
             f"耗时: {total_time:.3f}s | 错误: {str(e)}",
             exc_info=True
         )
-        # 确保返回HTTP响应而不是让连接断开
         raise HTTPException(status_code=500, detail=f"Embedding failed: {str(e)}")
+    finally:
+        _request_queue["embed"] -= 1
 
 
 @app.post("/rerank", response_model=RerankResponse)
 async def rerank(request: RerankRequest) -> RerankResponse:
     """Rerank documents for a query using a shared reranker model on this server."""
+    global _request_queue, _request_stats
+    
     task_start_time = time.time()
+    _request_queue["rerank"] += 1
+    _request_stats["rerank_total"] += 1
     
     if not request.documents:
         logger.warning("[重排序任务] 文档列表为空")
+        _request_queue["rerank"] -= 1
         return RerankResponse(scores=[])
 
     try:
@@ -715,8 +894,10 @@ async def rerank(request: RerankRequest) -> RerankResponse:
             f"速度: {doc_count/rerank_time:.1f} pairs/s"
         )
 
+        _request_stats["rerank_success"] += 1
         return RerankResponse(scores=scores_list)
     except Exception as e:
+        _request_stats["rerank_failed"] += 1
         total_time = time.time() - task_start_time
         logger.error(
             f"[重排序任务] ❌ 重排序失败 | 文档数量: {len(request.documents)} | "
@@ -724,6 +905,8 @@ async def rerank(request: RerankRequest) -> RerankResponse:
             exc_info=True
         )
         raise HTTPException(status_code=500, detail=f"Rerank failed: {e}")
+    finally:
+        _request_queue["rerank"] -= 1
 
 
 class OCRResponse(BaseModel):
