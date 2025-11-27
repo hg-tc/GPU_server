@@ -243,8 +243,9 @@ case "$MODE" in
     LOG_DIR="$ROOT_DIR/logs"
     mkdir -p "$LOG_DIR"
     
-    # 使用 nohup 后台启动
+    # 使用 nohup 后台启动（添加超时参数以防止连接断开）
     nohup uvicorn main:app --host 0.0.0.0 --port "$PORT" --workers 1 \
+      --timeout-keep-alive 300 --timeout-graceful-shutdown 30 \
       > "$LOG_DIR/gpu_server.log" 2>&1 &
     
     PID=$!
