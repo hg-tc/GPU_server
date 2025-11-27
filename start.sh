@@ -21,7 +21,7 @@ WORKERS="${WORKERS:-1}"
 
 # 检查虚拟环境
 if [ ! -d "venv" ]; then
-    echo -e "${RED}错误: 虚拟环境不存在，请先运行 setup_paddleocr.sh${NC}"
+    echo -e "${RED}错误: 虚拟环境不存在，请先运行 setup.sh${NC}"
     exit 1
 fi
 
@@ -55,7 +55,7 @@ echo -e "${GREEN}启动服务器...${NC}"
 echo ""
 
 # 启动服务器
-exec uvicorn main_v3:app \
+exec uvicorn main:app \
     --host "$HOST" \
     --port "$PORT" \
     --workers "$WORKERS" \
