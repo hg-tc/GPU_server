@@ -109,9 +109,81 @@ $PYTHON_CMD -c "from paddleocr import PaddleOCR; print('PaddleOCR 导入成功')
 # 验证 PP-StructureV3
 $PYTHON_CMD -c "from paddleocr import PPStructureV3; print('PPStructureV3 导入成功')"
 
+# ================================================
+# 预下载模型
+# ================================================
 echo ""
 echo -e "${GREEN}=========================================="
-echo "  安装完成！"
+echo "  预下载模型"
+echo "==========================================${NC}"
+
+# 设置 HuggingFace 镜像（可选，国内加速）
+export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+echo "HuggingFace 镜像: $HF_ENDPOINT"
+
+# 下载 PaddleOCR 模型
+echo ""
+echo -e "${GREEN}下载 PaddleOCR 模型...${NC}"
+$PYTHON_CMD << 'EOF'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+print("初始化 PaddleOCR (PP-OCRv5)...")
+from paddleocr import PaddleOCR
+ocr = PaddleOCR(
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
+)
+print("✅ PaddleOCR 模型下载完成")
+EOF
+
+# 下载 PP-StructureV3 模型
+echo ""
+echo -e "${GREEN}下载 PP-StructureV3 模型...${NC}"
+$PYTHON_CMD << 'EOF'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+print("初始化 PP-StructureV3...")
+from paddleocr import PPStructureV3
+structure = PPStructureV3()
+print("✅ PP-StructureV3 模型下载完成")
+EOF
+
+# 下载 Embedding 模型
+echo ""
+echo -e "${GREEN}下载 Embedding 模型 (BGE-large-zh-v1.5)...${NC}"
+$PYTHON_CMD << 'EOF'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+print("下载 BAAI/bge-large-zh-v1.5...")
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer("BAAI/bge-large-zh-v1.5")
+# 测试一下
+embeddings = model.encode(["测试文本"])
+print(f"✅ Embedding 模型下载完成，向量维度: {len(embeddings[0])}")
+EOF
+
+# 下载 Reranker 模型
+echo ""
+echo -e "${GREEN}下载 Reranker 模型 (BGE-reranker-v2-m3)...${NC}"
+$PYTHON_CMD << 'EOF'
+import os
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+print("下载 BAAI/bge-reranker-v2-m3...")
+from FlagEmbedding import FlagReranker
+reranker = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=True)
+# 测试一下
+scores = reranker.compute_score([["查询", "文档"]])
+print(f"✅ Reranker 模型下载完成")
+EOF
+
+echo ""
+echo -e "${GREEN}=========================================="
+echo "  安装完成！所有模型已下载"
 echo "==========================================${NC}"
 echo ""
 echo "启动服务器:"
