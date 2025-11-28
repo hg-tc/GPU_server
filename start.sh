@@ -28,6 +28,12 @@ fi
 # 激活虚拟环境
 source venv/bin/activate
 
+# 设置 HuggingFace 离线模式（使用本地缓存）
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+echo "HuggingFace 模式: 离线（使用本地缓存）"
+
 # 创建日志目录
 mkdir -p logs
 

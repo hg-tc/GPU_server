@@ -243,11 +243,16 @@ def _get_embedder():
         try:
             from sentence_transformers import SentenceTransformer
             
+            # 设置 HuggingFace 离线模式（使用本地缓存）
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            
             model_name = os.getenv("EMBED_MODEL_NAME", "BAAI/bge-large-zh-v1.5")
             device = "cuda" if DEVICE in ["gpu", "cuda"] else "cpu"
             
-            logger.info(f"初始化嵌入模型: {model_name} | device={device}")
-            _embedder = SentenceTransformer(model_name, device=device)
+            logger.info(f"初始化嵌入模型: {model_name} | device={device} | 离线模式（仅本地文件）")
+            # 使用 local_files_only=True 强制只使用本地缓存
+            _embedder = SentenceTransformer(model_name, device=device, local_files_only=True)
             logger.info("嵌入模型初始化成功")
         except Exception as e:
             logger.error(f"嵌入模型初始化失败: {e}")
@@ -261,13 +266,46 @@ def _get_reranker():
     if _reranker is None:
         try:
             from FlagEmbedding import FlagReranker
+            import glob
+            
+            # 设置 HuggingFace 离线模式（使用本地缓存）
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
             
             model_name = os.getenv("RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3")
             device = "cuda" if DEVICE in ["gpu", "cuda"] else "cpu"
             use_fp16 = device == "cuda"
             
-            logger.info(f"初始化重排序模型: {model_name} | device={device}")
-            _reranker = FlagReranker(model_name, use_fp16=use_fp16, device=device)
+            # 尝试找到本地缓存的模型路径
+            hf_home = os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+            cache_dir = os.path.join(hf_home, "hub")
+            model_cache_name = f"models--{model_name.replace('/', '--')}"
+            model_cache_path = os.path.join(cache_dir, model_cache_name, "snapshots")
+            
+            # 查找最新的快照目录
+            local_model_path = None
+            if os.path.exists(model_cache_path):
+                snapshots = sorted(glob.glob(os.path.join(model_cache_path, "*")), reverse=True)
+                if snapshots and os.path.isdir(snapshots[0]):
+                    local_model_path = snapshots[0]
+                    logger.info(f"找到本地模型缓存: {local_model_path}")
+            
+            # 如果找到本地路径，使用本地路径；否则使用模型名称（依赖环境变量）
+            if local_model_path:
+                logger.info(f"初始化重排序模型: {local_model_path} | device={device} | 离线模式（本地路径）")
+                _reranker = FlagReranker(
+                    local_model_path,
+                    use_fp16=use_fp16,
+                    devices=device
+                )
+            else:
+                logger.info(f"初始化重排序模型: {model_name} | device={device} | 离线模式（使用缓存）")
+                _reranker = FlagReranker(
+                    model_name,
+                    use_fp16=use_fp16,
+                    devices=device,
+                    cache_dir=cache_dir
+                )
             logger.info("重排序模型初始化成功")
         except ImportError:
             from sentence_transformers import CrossEncoder
@@ -322,12 +360,12 @@ async def health_check():
     except Exception as e:
         status["gpu"] = {"available": False, "error": str(e)}
     
-    # 模型状态
+    # 模型状态（懒加载：只有在使用时才会加载）
     status["models"] = {
-        "ocr": _ocr_engine is not None,
-        "structure": _structure_engine is not None,
-        "embedder": _embedder is not None,
-        "reranker": _reranker is not None,
+        "ocr": "loaded" if _ocr_engine is not None else "lazy",
+        "structure": "loaded" if _structure_engine is not None else "lazy",
+        "embedder": "loaded" if _embedder is not None else "lazy",
+        "reranker": "loaded" if _reranker is not None else "lazy",
     }
     
     return status

@@ -89,10 +89,16 @@ start_service() {
     # 激活虚拟环境
     source venv/bin/activate
     
+    # 设置 HuggingFace 离线模式（使用本地缓存）
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export HF_DATASETS_OFFLINE=1
+    log "HuggingFace 模式: 离线（使用本地缓存）"
+    
     # 启动服务（后台运行）
     log "启动服务: HOST=$HOST PORT=$PORT WORKERS=$WORKERS"
     
-    nohup uvicorn main:app \
+    nohup env HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 uvicorn main:app \
         --host "$HOST" \
         --port "$PORT" \
         --workers "$WORKERS" \
