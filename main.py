@@ -38,6 +38,7 @@ def setup_logging():
     log_format = "%(asctime)s [%(levelname)-8s] [%(name)s] %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
     
+    # 主日志文件处理器（启用实时刷新）
     file_handler = logging.FileHandler(
         log_dir / "gpu_server.log",
         encoding="utf-8",
@@ -45,7 +46,11 @@ def setup_logging():
     )
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(log_format, date_format))
+    # 设置延迟为 False，每次写入后立即刷新
+    if hasattr(file_handler, 'stream'):
+        file_handler.stream.reconfigure(line_buffering=True)
     
+    # 错误日志文件处理器（启用实时刷新）
     error_handler = logging.FileHandler(
         log_dir / "gpu_server_error.log",
         encoding="utf-8",
@@ -53,6 +58,9 @@ def setup_logging():
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(logging.Formatter(log_format, date_format))
+    # 设置延迟为 False，每次写入后立即刷新
+    if hasattr(error_handler, 'stream'):
+        error_handler.stream.reconfigure(line_buffering=True)
     
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
@@ -64,6 +72,18 @@ def setup_logging():
     root_logger.addHandler(file_handler)
     root_logger.addHandler(error_handler)
     root_logger.addHandler(console_handler)
+    
+    # 为文件处理器添加自动刷新机制
+    for handler in [file_handler, error_handler]:
+        original_emit = handler.emit
+        def make_flush_emit(h):
+            def flush_emit(record):
+                result = original_emit(record)
+                if hasattr(h, 'stream') and hasattr(h.stream, 'flush'):
+                    h.stream.flush()
+                return result
+            return flush_emit
+        handler.emit = make_flush_emit(handler)
     
     logger = logging.getLogger("gpu_server")
     logger.setLevel(logging.DEBUG)
