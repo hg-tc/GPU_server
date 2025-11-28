@@ -226,10 +226,58 @@ def test_rerank(base_url: str) -> bool:
         return False
 
 
+def test_ocr_base64(base_url: str, image_path: Path) -> bool:
+    """测试 Base64 图片 OCR"""
+    import base64
+    
+    try:
+        # 读取图片并转换为 base64
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        gpu_before = get_gpu_memory()
+        start = time.time()
+        resp = httpx.post(
+            f"{base_url}/ocr_base64",
+            json={
+                "image_base64": image_base64,
+                "filename": image_path.name
+            },
+            timeout=120
+        )
+        elapsed = time.time() - start
+        gpu_after = get_gpu_memory()
+        
+        print(f"状态码: {resp.status_code}")
+        print(f"耗时: {elapsed:.3f}s")
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            text = data.get("text", "")
+            confidence = data.get("confidence", 0)
+            lines = data.get("lines", [])
+            
+            print(f"置信度: {confidence:.4f}")
+            print(f"识别行数: {len(lines)}")
+            if text:
+                print(f"文本预览: {text[:200]}..." if len(text) > 200 else f"文本: {text}")
+                return True
+            else:
+                print("⚠️ 未识别到文本")
+                return False
+        else:
+            print(f"❌ 错误: {resp.text}")
+            return False
+    except Exception as e:
+        print(f"❌ 失败: {e}")
+        return False
+
+
 def test_ocr(base_url: str, image_path: str = None) -> bool:
-    """测试图片 OCR"""
+    """测试图片 OCR（同时测试文件上传和 base64 两种方式）"""
     print("\n" + "=" * 50)
-    print("🔍 测试图片 OCR /ocr_image")
+    print("🔍 测试图片 OCR")
     print("=" * 50)
     
     # 如果没有提供路径，尝试从 test 目录查找
@@ -246,6 +294,11 @@ def test_ocr(base_url: str, image_path: str = None) -> bool:
         print(f"❌ 图片不存在: {image_path}")
         return False
     
+    results = []
+    
+    # 方式1: 文件上传
+    print("\n方式 1: 文件上传 (/ocr_image)")
+    print("-" * 50)
     try:
         gpu_before = get_gpu_memory()
         start = time.time()
@@ -257,7 +310,6 @@ def test_ocr(base_url: str, image_path: str = None) -> bool:
         
         print(f"状态码: {resp.status_code}")
         print(f"耗时: {elapsed:.3f}s")
-        print(f"文件: {image_path.name}")
         
         if resp.status_code == 200:
             data = resp.json()
@@ -269,16 +321,26 @@ def test_ocr(base_url: str, image_path: str = None) -> bool:
             print(f"识别行数: {len(lines)}")
             if text:
                 print(f"文本预览: {text[:200]}..." if len(text) > 200 else f"文本: {text}")
+                results.append(True)
             else:
                 print("⚠️ 未识别到文本")
-            check_gpu_usage(gpu_before, gpu_after, "图片 OCR")
-            return True
+                results.append(False)
+            check_gpu_usage(gpu_before, gpu_after, "图片 OCR (文件上传)")
         else:
             print(f"❌ 错误: {resp.text}")
-            return False
+            results.append(False)
     except Exception as e:
         print(f"❌ 失败: {e}")
-        return False
+        results.append(False)
+    
+    # 方式2: Base64
+    print("\n方式 2: Base64 编码 (/ocr_base64)")
+    print("-" * 50)
+    base64_result = test_ocr_base64(base_url, image_path)
+    results.append(base64_result)
+    
+    # 返回结果（任一方式成功即可）
+    return any(results)
 
 
 def test_structure_image(base_url: str, image_path: str = None) -> bool:

@@ -427,6 +427,8 @@ async def ocr_image(file: UploadFile = File(...)) -> OCRResponse:
             if not content:
                 raise HTTPException(status_code=400, detail="Empty file")
             tmp.write(content)
+            tmp.flush()  # 确保数据写入磁盘
+            os.fsync(tmp.fileno())  # 强制同步到磁盘
         
         ocr = _get_ocr_engine()
         
@@ -437,27 +439,63 @@ async def ocr_image(file: UploadFile = File(...)) -> OCRResponse:
         confidences = []
         boxes = []
         
-        for res in results:
-            # 获取结果数据
-            if hasattr(res, 'rec_texts') and hasattr(res, 'rec_scores') and hasattr(res, 'rec_polys'):
-                rec_texts = res.rec_texts if hasattr(res, 'rec_texts') else []
-                rec_scores = res.rec_scores if hasattr(res, 'rec_scores') else []
-                rec_polys = res.rec_polys if hasattr(res, 'rec_polys') else []
+        # 调试：记录原始结果类型和内容
+        logger.debug(f"[OCR] 结果类型: {type(results)}, 结果数量: {len(results) if hasattr(results, '__len__') else 'N/A'}")
+        if isinstance(results, list) and len(results) > 0:
+            logger.debug(f"[OCR] 第一个结果类型: {type(results[0])}, 内容: {str(results[0])[:200]}")
+            if hasattr(results[0], '__dict__'):
+                logger.debug(f"[OCR] 第一个结果属性: {list(results[0].__dict__.keys())}")
+        
+        # 处理结果 - PaddleOCR 3.x 可能返回不同的格式
+        if isinstance(results, list):
+            for idx, res in enumerate(results):
+                logger.debug(f"[OCR] 处理结果 {idx}: 类型={type(res)}")
+                # 方法1: 检查是否有 rec_texts 属性
+                if hasattr(res, 'rec_texts'):
+                    rec_texts = res.rec_texts if hasattr(res, 'rec_texts') else []
+                    rec_scores = res.rec_scores if hasattr(res, 'rec_scores') else []
+                    rec_polys = res.rec_polys if hasattr(res, 'rec_polys') else []
+                    
+                    for i, text in enumerate(rec_texts):
+                        if text and text.strip():
+                            lines.append(text.strip())
+                            confidences.append(float(rec_scores[i]) if i < len(rec_scores) else 0.0)
+                            if i < len(rec_polys):
+                                boxes.append(rec_polys[i].tolist() if hasattr(rec_polys[i], 'tolist') else rec_polys[i])
                 
-                for i, text in enumerate(rec_texts):
-                    if text:
-                        lines.append(text)
-                        confidences.append(float(rec_scores[i]) if i < len(rec_scores) else 0.0)
-                        if i < len(rec_polys):
-                            boxes.append(rec_polys[i].tolist() if hasattr(rec_polys[i], 'tolist') else rec_polys[i])
-            elif hasattr(res, 'json'):
-                # 尝试从 json 属性获取
-                data = res.json
-                if 'rec_texts' in data:
-                    for i, text in enumerate(data['rec_texts']):
-                        if text:
-                            lines.append(text)
-                            confidences.append(float(data['rec_scores'][i]) if i < len(data.get('rec_scores', [])) else 0.0)
+                # 方法2: 检查是否有 json 属性
+                elif hasattr(res, 'json'):
+                    data = res.json
+                    if isinstance(data, dict) and 'rec_texts' in data:
+                        for i, text in enumerate(data['rec_texts']):
+                            if text and text.strip():
+                                lines.append(text.strip())
+                                confidences.append(float(data['rec_scores'][i]) if i < len(data.get('rec_scores', [])) else 0.0)
+                
+                # 方法3: 直接是字典格式
+                elif isinstance(res, dict):
+                    if 'rec_texts' in res:
+                        for i, text in enumerate(res['rec_texts']):
+                            if text and text.strip():
+                                lines.append(text.strip())
+                                confidences.append(float(res['rec_scores'][i]) if i < len(res.get('rec_scores', [])) else 0.0)
+                                if 'rec_polys' in res and i < len(res['rec_polys']):
+                                    boxes.append(res['rec_polys'][i])
+                
+                # 方法4: 尝试直接访问文本（兼容旧版本格式）
+                elif isinstance(res, (list, tuple)) and len(res) >= 2:
+                    # 格式: [[[x1,y1], [x2,y2], ...], (text, confidence)]
+                    for item in res:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            text = item[1][0] if isinstance(item[1], (list, tuple)) else str(item[1])
+                            conf = item[1][1] if isinstance(item[1], (list, tuple)) and len(item[1]) > 1 else 0.0
+                            if text and text.strip():
+                                lines.append(text.strip())
+                                confidences.append(float(conf))
+                                if isinstance(item[0], (list, tuple)):
+                                    boxes.append(item[0])
+        
+        logger.debug(f"[OCR] 解析结果: {len(lines)} 行文本")
         
         full_text = "\n".join(lines)
         avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
@@ -512,6 +550,8 @@ async def ocr_base64(request: OCRBase64Request) -> OCRResponse:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp_path = tmp.name
             tmp.write(image_data)
+            tmp.flush()  # 确保数据写入磁盘
+            os.fsync(tmp.fileno())  # 强制同步到磁盘
         
         ocr = _get_ocr_engine()
         results = ocr.predict(tmp_path)
@@ -520,12 +560,31 @@ async def ocr_base64(request: OCRBase64Request) -> OCRResponse:
         confidences = []
         boxes = []
         
-        for res in results:
-            if hasattr(res, 'rec_texts'):
-                for i, text in enumerate(res.rec_texts):
-                    if text:
-                        lines.append(text)
-                        confidences.append(float(res.rec_scores[i]) if i < len(res.rec_scores) else 0.0)
+        # 使用与 ocr_image 相同的解析逻辑
+        if isinstance(results, list):
+            for idx, res in enumerate(results):
+                logger.debug(f"[OCR-Base64] 处理结果 {idx}: 类型={type(res)}")
+                if hasattr(res, 'rec_texts'):
+                    rec_texts = res.rec_texts if hasattr(res, 'rec_texts') else []
+                    rec_scores = res.rec_scores if hasattr(res, 'rec_scores') else []
+                    
+                    for i, text in enumerate(rec_texts):
+                        if text and text.strip():
+                            lines.append(text.strip())
+                            confidences.append(float(rec_scores[i]) if i < len(rec_scores) else 0.0)
+                elif isinstance(res, dict) and 'rec_texts' in res:
+                    for i, text in enumerate(res['rec_texts']):
+                        if text and text.strip():
+                            lines.append(text.strip())
+                            confidences.append(float(res['rec_scores'][i]) if i < len(res.get('rec_scores', [])) else 0.0)
+                elif isinstance(res, (list, tuple)) and len(res) >= 2:
+                    for item in res:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            text = item[1][0] if isinstance(item[1], (list, tuple)) else str(item[1])
+                            conf = item[1][1] if isinstance(item[1], (list, tuple)) and len(item[1]) > 1 else 0.0
+                            if text and text.strip():
+                                lines.append(text.strip())
+                                confidences.append(float(conf))
         
         full_text = "\n".join(lines)
         avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
